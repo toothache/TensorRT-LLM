@@ -200,13 +200,19 @@ class GenerationMixin:
             streamingllm=False,
             attn_layer_idx=None,
             opt_batch_size=None,
-            num_kv_heads_per_layer: Optional[List[int]] = None):
+            num_kv_heads_per_layer: Optional[List[int]] = None,
+            max_kv_input_len: int = None,
+            do_cross_attention=False):
 
         if attn_layer_idx is not None and num_kv_heads_per_layer is not None:
             assert len(attn_layer_idx) == len(num_kv_heads_per_layer), (
                 f"Expected len(attn_layer_idx) ({len(attn_layer_idx)})"
                 f" == len(num_kv_heads_per_layer) ({len(num_kv_heads_per_layer)})"
             )
+        if do_cross_attention:
+            assert max_kv_input_len is not None, (
+                "max_kv_input_len must be specified for cross-attention.")
+
         default_range = GenerationMixin.default_range
 
         if opt_batch_size:
@@ -225,10 +231,10 @@ class GenerationMixin:
         _mask_len_ctx = default_range(max_input_len)
         _kv_cache_range_ctx = [0, 0, 0]
         _kv_cache_range_gen = default_range(max_seq_len, -1)
+        kv_max_seq_len = max_kv_input_len if do_cross_attention else max_seq_len
         if kv_cache_type == KVCacheType.DISABLED:
-            _kv_cache_range = default_range(max_seq_len)
+            _kv_cache_range = default_range(kv_max_seq_len)
         else:
-            kv_max_seq_len = max_seq_len
             if streamingllm:
                 # add the max bubble length
                 kv_max_seq_len += tokens_per_block - 1
@@ -488,6 +494,70 @@ class GenerationMixin:
                 ]),
             )
 
+        cross_kv_length = None
+        encoder_input_lengths = None
+        cross_attention_mask = None
+        cross_attention_packed_mask = None
+        if do_cross_attention:
+            encoder_input_len_range = default_range(max_kv_input_len)
+            encoder_num_tokens_range = default_range(max_kv_input_len * max_batch_size)
+            decoder_num_tokens_range = default_range(max_input_len * max_batch_size)
+            max_cross_packed_mask_dim0 = max_batch_size * (
+                (max_input_len + 128 - 1) // 128) * 128
+            max_cross_packed_mask_dim1 = (
+                (max_kv_input_len + 256 - 1) // 256) * 256 // 32
+            cross_packed_mask_dim0_range = default_range(max_cross_packed_mask_dim0)
+            cross_packed_mask_dim1_range = default_range(max_cross_packed_mask_dim1)
+
+            cross_kv_length = Tensor(
+                name="cross_kv_length",
+                shape=(-1,),
+                dtype=trt.int32,
+                dim_range=OrderedDict(
+                    [("kv_input_len", encoder_input_len_range)]
+                ),
+            )
+            encoder_input_lengths = Tensor(
+                name="encoder_input_lengths",
+                shape=(-1,),
+                dtype=trt.int32,
+                dim_range=OrderedDict(
+                    [("batch_size", bs_range)]
+                ),
+            )
+
+            if not use_gpt_attention_plugin:
+                cross_attention_mask = Tensor(
+                    name='cross_attention_mask',
+                    dtype=trt.int32,
+                    shape=[-1, -1, -1],
+                    dim_range=OrderedDict([
+                        ('batch_size_beam_width', [bb_range]),
+                        ('query_len', [default_range(max_input_len)]),
+                        ('kv_input_len', [encoder_input_len_range]),
+                    ]),
+                )
+            else:
+                cross_attention_mask = Tensor(
+                    name='cross_attention_mask',
+                    dtype=trt.bool,
+                    shape=[-1, -1],
+                    dim_range=OrderedDict([
+                        ('decoder_num_tokens_2', [decoder_num_tokens_range]),  # TODO should use same name as input_ids
+                        ('encoder_input_len_2', [encoder_input_len_range]),
+                    ]),
+                )
+
+                cross_attention_packed_mask = Tensor(
+                    name='cross_attention_packed_mask',
+                    dtype=trt.int32,
+                    shape=[-1, -1],
+                    dim_range=OrderedDict([
+                        ('cross_packed_mask_dim0', [cross_packed_mask_dim0_range]),
+                        ('cross_packed_mask_dim1', [cross_packed_mask_dim1_range]),
+                    ]),
+                )
+
         return {
             'attention_mask': attention_mask,
             'sequence_length': sequence_length,
@@ -505,6 +575,10 @@ class GenerationMixin:
             'host_request_types': host_request_types,
             'host_runtime_perf_knobs': runtime_perf_knobs,
             'host_context_progress': context_progress,
+            'cross_kv_length': cross_kv_length,
+            'encoder_input_lengths': encoder_input_lengths,
+            'cross_attention_mask': cross_attention_mask,
+            'cross_attention_packed_mask': cross_attention_packed_mask,
         }
 
     def prepare_basic_inputs(
