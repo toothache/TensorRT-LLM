@@ -116,7 +116,7 @@ inline __device__ void device_flash_attention_nl(Params const& params)
 
     // The block info.
     Single_cta<Kernel_traits::VERSION> const binfo(params, bidb, bidh, 0, tidx);
-    int const q_sequence_start = q_loop * Gmem_tile_q::ROWS + binfo.actual_kv_seqlen - binfo.actual_q_seqlen;
+    int const q_sequence_start = q_loop * Gmem_tile_q::ROWS; // + binfo.actual_kv_seqlen - binfo.actual_q_seqlen;
     if (binfo.stop_early(q_loop * Gmem_tile_q::ROWS))
     {
         return;
@@ -160,7 +160,7 @@ inline __device__ void device_flash_attention_nl(Params const& params)
     Smem_tile_o smem_o(&smem_[Kernel_traits::NO_LOOP ? 0 : Smem_tile_q::BYTES_PER_TILE], tidx);
 
     // With chunked attention, the q_start_seqlen might not be multiple of Cta_tile_p::M.
-    int const kv_mask_loop_start = int(q_sequence_start / Cta_tile_p::N) * Cta_tile_p::N;
+    int const kv_mask_loop_start = 0; // int(q_sequence_start / Cta_tile_p::N) * Cta_tile_p::N;
 
     // How many loops we need to apply mask.
     constexpr int MASK_LOOPS = (Cta_tile_p::M + Cta_tile_p::N - 1) / Cta_tile_p::N;

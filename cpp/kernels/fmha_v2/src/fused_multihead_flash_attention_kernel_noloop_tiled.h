@@ -133,7 +133,7 @@ inline __device__ void device_flash_attention_nl_tiled(Params const& params)
     int q_sequence_start = Kernel_traits::IS_MTP ? (q_loop * Gmem_tile_q::ROWS) / params.num_grouped_heads
                                                  : (q_loop * Gmem_tile_q::ROWS);
     // Consider the past sequence length.
-    q_sequence_start += binfo.actual_kv_seqlen - binfo.actual_q_seqlen;
+    // q_sequence_start += binfo.actual_kv_seqlen - binfo.actual_q_seqlen;
     if (binfo.stop_early(q_loop * Gmem_tile_q::ROWS))
     {
         return;
@@ -165,7 +165,7 @@ inline __device__ void device_flash_attention_nl_tiled(Params const& params)
     Smem_tile_o smem_o(&smem_[Kernel_traits::NO_LOOP ? 0 : Smem_tile_q::BYTES_PER_TILE], tidx);
 
     // With chunked attention, the q_start_seqlen might not be multiple of Cta_tile_p::M.
-    int const kv_mask_loop_start = int(q_sequence_start / Cta_tile_p::N) * Cta_tile_p::N;
+    int const kv_mask_loop_start = 0; // int(q_sequence_start / Cta_tile_p::N) * Cta_tile_p::N;
 
     // The start/end step of kv loops.
     // Do we need to mask out the tokens that is not in the sliding window.
